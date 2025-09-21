@@ -38,13 +38,24 @@ if (!MOCK_MODE) {
       // Fix private key formatting - replace literal \n with actual newlines
       if (credentials.private_key) {
         credentials.private_key = credentials.private_key.replace(/\\n/g, '\n');
+        // Ensure proper key format - remove any extra whitespace and ensure proper line endings
+        credentials.private_key = credentials.private_key.trim();
+        if (!credentials.private_key.endsWith('\n')) {
+          credentials.private_key += '\n';
+        }
       }
     } else if (process.env.GOOGLE_CLIENT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
+      let privateKey = process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
+      privateKey = privateKey.trim();
+      if (!privateKey.endsWith('\n')) {
+        privateKey += '\n';
+      }
+      
       credentials = {
         type: "service_account",
         project_id: PROJECT_ID,
         private_key_id: "d62fec6d38ac6021c202694ab7baa6750f476e0d",
-        private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        private_key: privateKey,
         client_email: process.env.GOOGLE_CLIENT_EMAIL,
         client_id: "107629132671496374425",
         auth_uri: "https://accounts.google.com/o/oauth2/auth",

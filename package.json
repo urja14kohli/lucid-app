@@ -27,6 +27,9 @@
     "tesseract.js": "^5.1.0",
     "zod": "3.23.8"
   },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "devDependencies": {
     "@types/formidable": "^3.4.5",
     "@types/node": "20.11.19",
