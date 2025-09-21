@@ -1,15 +1,24 @@
 import './globals.css';
-export const metadata = { title: 'Lucid', description: 'Legal documents, simplified' };
+import { Inter } from 'next/font/google';
+
+const inter = Inter({ 
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
+  variable: '--font-inter'
+});
+
+export const metadata = { 
+  title: 'Lucid AI', 
+  description: 'Demystify your legal documents with AI-powered analysis' 
+};
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" className={inter.variable}>
       <body>
         <div className="shell">
           <main className="main">
             <div className="container">
-              <div className="header">
-                <div className="muted">Upload your document to get started</div>
-              </div>
               {children}
             </div>
           </main>

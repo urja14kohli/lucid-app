@@ -26,6 +26,7 @@ export default function PDFVisualCanvas({ file, segments }: Props) {
 
   useEffect(() => {
     let cancelled = false;
+    const container = containerRef.current;
 
     const initPDF = async () => {
       try {
@@ -45,8 +46,8 @@ export default function PDFVisualCanvas({ file, segments }: Props) {
         if (cancelled) return;
 
         // Clear previous content
-        if (containerRef.current) {
-          containerRef.current.innerHTML = '';
+        if (container) {
+          container.innerHTML = '';
         }
 
         const pageData: { num: number; width: number; height: number; canvas: HTMLCanvasElement }[] = [];
@@ -107,7 +108,7 @@ export default function PDFVisualCanvas({ file, segments }: Props) {
           });
 
           pageContainer.appendChild(overlay);
-          containerRef.current?.appendChild(pageContainer);
+          container?.appendChild(pageContainer);
         }
 
         setPages(pageData);
@@ -123,8 +124,8 @@ export default function PDFVisualCanvas({ file, segments }: Props) {
 
     return () => {
       cancelled = true;
-      if (containerRef.current) {
-        containerRef.current.innerHTML = '';
+      if (container) {
+        container.innerHTML = '';
       }
     };
   }, [file, segments]);

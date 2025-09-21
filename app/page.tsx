@@ -1,5 +1,6 @@
 'use client';
 import React, { useState } from 'react';
+import Image from 'next/image';
 import { AnalysisResult, Clause } from '../lib/types';
 import DOMPurify from 'isomorphic-dompurify';
 import PDFVisualCanvas from './components/PDFVisualCanvas';
@@ -13,12 +14,15 @@ import {
   MessageCircle, 
   Download, 
   AlertTriangle, 
-  Sparkles, 
+  Check, 
   BookOpen, 
   Lightbulb, 
   Bot, 
   Rocket, 
   Brain,
+  ThumbsUp,
+  ThumbsDown,
+  Copy,
   Flag,
   Files,
   Globe
@@ -196,8 +200,15 @@ export default function HomePage() {
   const [mode, setMode] = useState<'none'|'summary'|'line'|'ask'|'canvas'|'notes'>('none');
   const [question, setQuestion] = useState('');
   const [answer, setAnswer] = useState<string>('');
+  const [messages, setMessages] = useState<Array<{
+    id: string;
+    type: 'user' | 'assistant';
+    content: string;
+    timestamp: Date;
+  }>>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [messageFeedback, setMessageFeedback] = useState<{[key: string]: 'like' | 'dislike' | null}>({});
   const [notes, setNotes] = useState<Array<{
     id: string;
     page: number;
@@ -205,6 +216,44 @@ export default function HomePage() {
     risks: any[];
     timestamp: Date;
   }>>([]);
+
+  // Handle message feedback
+  const handleFeedback = (messageId: string, feedback: 'like' | 'dislike') => {
+    setMessageFeedback(prev => ({
+      ...prev,
+      [messageId]: prev[messageId] === feedback ? null : feedback
+    }));
+  };
+
+  // Handle copy message
+  const handleCopyMessage = async (content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      // You could add a toast notification here
+    } catch (err) {
+      console.error('Failed to copy text: ', err);
+    }
+  };
+
+  // Function to render markdown-like formatting
+  const formatMessage = (content: string) => {
+    return content
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.*?)\*/g, '<em>$1</em>')
+      .replace(/\n\n/g, '</p><p>')
+      .replace(/\n/g, '<br>')
+      .replace(/^/, '<p>')
+      .replace(/$/, '</p>');
+  };
+
+  // Function to format text with proper HTML formatting
+  const formatText = (text: string) => {
+    return text
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.*?)\*/g, '<em>$1</em>')
+      .replace(/\n\n/g, '</p><p>')
+      .replace(/\n/g, '<br>');
+  };
 
   // Helper function to get content for current page
   const getPageContent = (page: number) => {
@@ -433,7 +482,7 @@ export default function HomePage() {
     setMode(targetMode);
     setProgress('Reading your document…');
     setLoading(true); setAnswer(''); setResult(null);
-    
+
     try {
       const fd = new FormData();
       fd.append('file', file);
@@ -451,9 +500,9 @@ export default function HomePage() {
       if (json.needsOCR) {
         setProgress('Running OCR… this may take a moment');
         await performOCRAnalysis();
-        return;
-      }
-      
+      return;
+    }
+
       setResult(json);
       
       // Set total pages from the analysis result
@@ -577,549 +626,643 @@ export default function HomePage() {
     }
   }
 
-
   async function handleAsk() {
-    if (!result || !question) return;
+    if (!file || !question.trim()) return;
+    
+    const userMessage = {
+      id: `user-${Date.now()}`,
+      type: 'user' as const,
+      content: question.trim(),
+      timestamp: new Date()
+    };
+    
+    setMessages(prev => [...prev, userMessage]);
     setMode('ask');
-    setProgress('Thinking…');
-    const res = await fetch('/api/ask', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ question, context: result }),
-    });
-    const json = await res.json();
-    setAnswer(json.answer);
-    setProgress('');
+    setProgress('Lucid AI is demystifying your legal docs....');
+    setAnswer(''); // Clear previous answer
+    
+    // Add a typing indicator message
+    const typingMessage = {
+      id: `typing-${Date.now()}`,
+      type: 'assistant' as const,
+      content: 'Lucid AI is demystifying your legal docs....',
+      timestamp: new Date(),
+      isTyping: true
+    };
+    setMessages(prev => [...prev, typingMessage]);
+    
+    try {
+      const res = await fetch('/api/ask', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ 
+          question: question.trim(), 
+          context: result || null,
+          filename: file?.name || 'Unknown document',
+          conversationHistory: messages.slice(-5) // Send last 5 messages for context
+        }),
+      });
+      
+      if (!res.ok) {
+        throw new Error(`HTTP error! status: ${res.status}`);
+      }
+      
+      const json = await res.json();
+      
+      // Remove typing indicator
+      setMessages(prev => prev.filter(msg => msg.id !== typingMessage.id));
+      
+      const assistantMessage = {
+        id: `assistant-${Date.now()}`,
+        type: 'assistant' as const,
+        content: json.answer,
+        timestamp: new Date()
+      };
+      
+      setMessages(prev => [...prev, assistantMessage]);
+      setAnswer(json.answer);
+    } catch (error) {
+      console.error('Ask error:', error);
+      
+      // Remove typing indicator
+      setMessages(prev => prev.filter(msg => msg.id !== typingMessage.id));
+      
+      const errorMessage = {
+        id: `error-${Date.now()}`,
+        type: 'assistant' as const,
+        content: 'Sorry, I encountered an error while processing your question. Please try again.',
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, errorMessage]);
+      setAnswer('Sorry, I encountered an error while processing your question. Please try again.');
+    } finally {
+      setProgress('');
+      setQuestion(''); // Clear the question after sending
+    }
   }
 
   return (
     <>
-      <section className="panel" style={{padding:32}}>
-        <div style={{textAlign:'center', marginBottom:24}}>
+      <div className="fade-in">
+      {/* Main centered card */}
+      <div className="glass-card" style={{ 
+        maxWidth: '600px', 
+        margin: '0 auto', 
+        padding: '48px 32px',
+        textAlign: 'center'
+      }}>
+        {/* Logo and Title */}
+        <div style={{ marginBottom: '32px' }}>
+          <div style={{
+            width: '80px',
+            height: '80px',
+            background: 'transparent',
+            borderRadius: '12px',
+            margin: '0 auto 16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}>
+            <Image 
+              src="/zap logo Background Removed copy.png" 
+              alt="Lucid AI Logo" 
+              width={72}
+              height={72}
+            />
+          </div>
+          <h1 style={{
+            fontSize: '36px',
+            fontWeight: '700',
+            color: '#1e293b',
+            margin: '0 0 8px 0',
+            letterSpacing: '-0.02em'
+          }}>
+            Lucid AI
+          </h1>
+          <p style={{
+            fontSize: '18px',
+            color: '#64748b',
+            margin: '0 0 32px 0',
+            fontWeight: '500'
+          }}>
+            Demystify your legal documents
+            </p>
+          </div>
+
+        {/* File Upload Area */}
+        <div style={{ marginBottom: '24px' }}>
           <input 
             type="file" 
             accept="application/pdf" 
             onChange={e=>setFile(e.target.files?.[0]||null)}
             style={{
-              display: 'block',
-              margin: '0 auto 16px',
-              padding: '20px',
-              fontSize: '16px',
-              borderRadius: '16px',
-              border: '2px dashed rgba(59, 130, 246, 0.3)',
-              background: 'rgba(255, 255, 255, 0.5)',
-              cursor: 'pointer',
               width: '100%',
-              maxWidth: '400px'
+              padding: '24px',
+              fontSize: '16px',
+              borderRadius: '12px',
+              border: '2px dashed var(--accent)',
+              background: 'var(--glass-bg)',
+              backdropFilter: 'blur(10px)',
+              WebkitBackdropFilter: 'blur(10px)',
+              cursor: 'pointer',
+              transition: 'all 200ms ease-in-out',
+              color: '#1e293b'
+            }}
+            onMouseOver={(e) => {
+              e.currentTarget.style.borderColor = 'var(--accent)';
+              e.currentTarget.style.background = 'var(--glass-hover)';
+            }}
+            onMouseOut={(e) => {
+              e.currentTarget.style.borderColor = 'var(--glass-border)';
+              e.currentTarget.style.background = 'var(--glass-bg)';
             }}
           />
-          <select value={language} onChange={e=>setLanguage(e.target.value as any)} className="lang">
-            <option value="en">English</option>
-            <option value="hinglish">Hinglish</option>
-            <option value="hi">Hindi</option>
-          </select>
-        </div>
-        
-        
-        {file && (
+            </div>
+
+        {/* Progress Bar */}
+        {loading && (
+          <div className="progress-bar">
+            <div 
+              className="progress-fill" 
+              style={{ width: `${progress === 'Analyzing...' ? 100 : 50}%` }}
+              />
+            </div>
+        )}
+
+        {/* Action Buttons */}
+        {file && !loading && (
           <div style={{
-            display:'flex', 
-            justifyContent:'center', 
-            marginTop:32, 
-            flexWrap:'wrap',
-            gap:'12px',
-            padding:'0'
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gap: '12px',
+            marginTop: '24px'
           }}>
-            {/* Summary Button */}
             <button 
               onClick={()=>startAnalyze('summary')} 
-              disabled={loading}
-              style={{
-                background: loading ? 'rgba(204, 204, 204, 0.3)' : 'rgba(255, 255, 255, 0.25)',
-                backdropFilter: 'blur(15px)',
-                WebkitBackdropFilter: 'blur(15px)',
-                color: loading ? '#9ca3af' : '#1e40af',
-                border: `1px solid ${loading ? 'rgba(204, 204, 204, 0.3)' : 'rgba(30, 64, 175, 0.2)'}`,
-                padding: '14px 20px',
-                borderRadius: '12px',
-                fontSize: '14px',
-                fontWeight: '600',
-                cursor: loading ? 'not-allowed' : 'pointer',
-                transition: 'all 0.2s ease',
-                minWidth: '140px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
+              className="btn"
+              style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'center', 
                 gap: '8px',
-                boxShadow: loading ? 'none' : '0 4px 15px rgba(30, 64, 175, 0.1)'
-              }}
-              onMouseOver={(e) => {
-                if (!loading) {
-                  e.currentTarget.style.transform = 'translateY(-1px)';
-                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.35)';
-                  e.currentTarget.style.boxShadow = '0 8px 25px rgba(30, 64, 175, 0.2)';
-                }
-              }}
-              onMouseOut={(e) => {
-                if (!loading) {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.25)';
-                  e.currentTarget.style.boxShadow = '0 4px 15px rgba(30, 64, 175, 0.1)';
-                }
+                padding: '14px 20px'
               }}
             >
-              <BarChart3 className="inline-block w-4 h-4" />
+              <BarChart3 className="w-4 h-4" />
               Summary
             </button>
 
-            {/* Key Risk Insights Button */}
             <button 
               onClick={()=>startAnalyze('line')} 
-              disabled={loading}
-              style={{
-                background: loading ? 'rgba(204, 204, 204, 0.3)' : 'rgba(255, 255, 255, 0.25)',
-                backdropFilter: 'blur(15px)',
-                WebkitBackdropFilter: 'blur(15px)',
-                color: loading ? '#9ca3af' : '#1e40af',
-                border: `1px solid ${loading ? 'rgba(204, 204, 204, 0.3)' : 'rgba(30, 64, 175, 0.2)'}`,
-                padding: '14px 20px',
-                borderRadius: '12px',
-                fontSize: '14px',
-                fontWeight: '600',
-                cursor: loading ? 'not-allowed' : 'pointer',
-                transition: 'all 0.2s ease',
-                minWidth: '160px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
+              className="btn"
+              style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'center', 
                 gap: '8px',
-                boxShadow: loading ? 'none' : '0 4px 15px rgba(30, 64, 175, 0.1)'
-              }}
-              onMouseOver={(e) => {
-                if (!loading) {
-                  e.currentTarget.style.transform = 'translateY(-1px)';
-                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.35)';
-                  e.currentTarget.style.boxShadow = '0 8px 25px rgba(30, 64, 175, 0.2)';
-                }
-              }}
-              onMouseOut={(e) => {
-                if (!loading) {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.25)';
-                  e.currentTarget.style.boxShadow = '0 4px 15px rgba(30, 64, 175, 0.1)';
-                }
+                padding: '14px 20px'
               }}
             >
-              <AlertTriangle className="inline-block w-4 h-4" />
-              Key Risk Insights
+              <AlertTriangle className="w-4 h-4" />
+              Key Risks
             </button>
 
-            {/* Page-by-Page Analysis Button */}
-            <button 
-              onClick={()=>{startAnalyze('line'); setMode('canvas');}} 
-              disabled={loading}
-              style={{
-                background: loading ? 'rgba(204, 204, 204, 0.3)' : 'rgba(255, 255, 255, 0.25)',
-                backdropFilter: 'blur(15px)',
-                WebkitBackdropFilter: 'blur(15px)',
-                color: loading ? '#9ca3af' : '#1e40af',
-                border: `1px solid ${loading ? 'rgba(204, 204, 204, 0.3)' : 'rgba(30, 64, 175, 0.2)'}`,
-                padding: '14px 20px',
-                borderRadius: '12px',
-                fontSize: '14px',
-                fontWeight: '600',
-                cursor: loading ? 'not-allowed' : 'pointer',
-                transition: 'all 0.2s ease',
-                minWidth: '180px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                boxShadow: loading ? 'none' : '0 4px 15px rgba(30, 64, 175, 0.1)'
-              }}
-              onMouseOver={(e) => {
-                if (!loading) {
-                  e.currentTarget.style.transform = 'translateY(-1px)';
-                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.35)';
-                  e.currentTarget.style.boxShadow = '0 8px 25px rgba(30, 64, 175, 0.2)';
-                }
-              }}
-              onMouseOut={(e) => {
-                if (!loading) {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.25)';
-                  e.currentTarget.style.boxShadow = '0 4px 15px rgba(30, 64, 175, 0.1)';
-                }
-              }}
-            >
-              <FileText className="inline-block w-4 h-4" />
-              Page-by-Page Analysis
-            </button>
-
-            {/* Ask Question Button */}
             <button 
               onClick={()=>setMode('ask')} 
-              disabled={loading}
-              style={{
-                background: loading ? 'rgba(204, 204, 204, 0.3)' : 'rgba(255, 255, 255, 0.25)',
-                backdropFilter: 'blur(15px)',
-                WebkitBackdropFilter: 'blur(15px)',
-                color: loading ? '#9ca3af' : '#1e40af',
-                border: `1px solid ${loading ? 'rgba(204, 204, 204, 0.3)' : 'rgba(30, 64, 175, 0.2)'}`,
-                padding: '14px 20px',
-                borderRadius: '12px',
-                fontSize: '14px',
-                fontWeight: '600',
-                cursor: loading ? 'not-allowed' : 'pointer',
-                transition: 'all 0.2s ease',
-                minWidth: '140px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
+              className="btn"
+              style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'center', 
                 gap: '8px',
-                boxShadow: loading ? 'none' : '0 4px 15px rgba(30, 64, 175, 0.1)'
-              }}
-              onMouseOver={(e) => {
-                if (!loading) {
-                  e.currentTarget.style.transform = 'translateY(-1px)';
-                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.35)';
-                  e.currentTarget.style.boxShadow = '0 8px 25px rgba(30, 64, 175, 0.2)';
-                }
-              }}
-              onMouseOut={(e) => {
-                if (!loading) {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.25)';
-                  e.currentTarget.style.boxShadow = '0 4px 15px rgba(30, 64, 175, 0.1)';
-                }
+                padding: '14px 20px'
               }}
             >
-              <MessageCircle className="inline-block w-4 h-4" />
-              Ask Questions
+              <MessageCircle className="w-4 h-4" />
+              Ask
             </button>
+
+            <button 
+              onClick={()=>{startAnalyze('line'); setMode('canvas');}} 
+              className="btn"
+              style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'center', 
+                gap: '8px',
+                padding: '14px 20px'
+              }}
+            >
+              <FileText className="w-4 h-4" />
+              Page Analysis
+            </button>
+                  </div>
+        )}
+
+        {/* Loading State */}
+        {loading && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '12px',
+            marginTop: '24px',
+            color: 'var(--text-secondary)'
+          }}>
+            <div className="typing-dots">
+              <div className="typing-dot"></div>
+              <div className="typing-dot"></div>
+              <div className="typing-dot"></div>
+                </div>
+            <span>{progress}</span>
           </div>
         )}
-        
-        {progress && <div className="progress">{progress}</div>}
-      </section>
+      </div>
+      </div>
 
       {/* SUMMARY VIEW */}
       {mode==='summary' && result && (
-        <section className="panel" style={{padding:32, marginTop:20}}>
-          <div style={{textAlign:'center', marginBottom:24}}>
-            <h3><BarChart3 className="inline-block w-4 h-4 mr-2" />Document Summary</h3>
-            <div style={{display:'flex', alignItems:'center', justifyContent:'center', gap:8, marginBottom:16}}>
-              <span style={{fontSize:14, color:'var(--text-secondary)'}}>Overall Risk:</span>
-              <span className={'risk '+result.overallRisk}>{result.overallRisk}</span>
-            </div>
+        <div className="fade-in" style={{ marginTop: '32px' }}>
+          <div className="glass-card" style={{ padding: '32px', marginBottom: '24px' }}>
+            <div style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'space-between',
+              marginBottom: '24px',
+              flexWrap: 'wrap',
+              gap: '16px'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <BarChart3 className="w-5 h-5" style={{ color: 'var(--accent)' }} />
+                <h3 style={{ 
+                  margin: 0, 
+                  fontSize: '20px', 
+                  fontWeight: '600',
+                  color: 'var(--text)'
+                }}>
+                  Document Summary
+                </h3>
           </div>
-          
-          <div style={{
-            background: 'rgba(255, 255, 255, 0.5)', 
-            padding: '20px', 
-            borderRadius: '12px', 
-            marginBottom: '24px',
-            lineHeight: '1.7'
-          }}>
-            <div dangerouslySetInnerHTML={{__html: DOMPurify.sanitize(result.summary)}} />
-          </div>
-          
-          {result.clauses.filter(c=>c.risk!=='low').length > 0 && (
-            <>
-              <h4 style={{marginBottom:16, display:'flex', alignItems:'center', gap:8}}>
-                <AlertTriangle className="inline-block w-4 h-4 mr-2" />Key Risks to Review
-              </h4>
-              <ul>
-                {result.clauses.filter(c=>c.risk!=='low').slice(0,5).map(c=>(
-                  <li key={c.id}>
-                    <span className={'risk '+c.risk}>{c.risk}</span>
-                    <div>
-                      <strong style={{color:'var(--text)'}}>{c.title}</strong>
-                      <div style={{fontSize:14, color:'var(--text-secondary)', marginTop:4}}>{c.simple}</div>
+              <span className={`risk ${result.overallRisk.toLowerCase()}`}>
+                {result.overallRisk.toUpperCase()}
+              </span>
+        </div>
+
+            <div style={{
+              background: 'var(--glass-bg)',
+              padding: '24px',
+              borderRadius: '12px',
+              marginBottom: '24px',
+              border: '1px solid var(--glass-border)',
+              backdropFilter: 'blur(10px)',
+              WebkitBackdropFilter: 'blur(10px)',
+              lineHeight: '1.7'
+            }}>
+              <div dangerouslySetInnerHTML={{__html: DOMPurify.sanitize(formatText(result.summary))}} />
+      </div>
+            
+            {result.clauses.filter(c=>c.risk!=='low').length > 0 && (
+              <>
+                <h4 style={{
+                  marginBottom: '20px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  fontSize: '18px',
+                  fontWeight: '600',
+                  color: 'var(--text)'
+                }}>
+                  <AlertTriangle className="w-4 h-4" style={{ color: 'var(--accent)' }} />
+                  Key Risks to Review
+                </h4>
+                <div style={{ display: 'grid', gap: '16px' }}>
+                  {result.clauses.filter(c=>c.risk!=='low').slice(0,5).map(c=>(
+                    <div key={c.id} className="glass-card" style={{
+                      padding: '20px',
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '16px'
+                    }}>
+                      <span className={`risk ${c.risk.toLowerCase()}`}>
+                        {c.risk.toUpperCase()}
+                      </span>
+                      <div style={{ flex: 1 }}>
+                        <strong style={{
+                          color: 'var(--text)',
+                          fontSize: '16px',
+                          fontWeight: '600',
+                          display: 'block',
+                          marginBottom: '8px'
+                        }}>
+                          {c.title}
+                        </strong>
+                        <div style={{
+                          fontSize: '14px',
+                          color: 'var(--text-secondary)',
+                          lineHeight: '1.5'
+                        }}>
+                          {c.simple}
+                        </div>
+                      </div>
                     </div>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-          
-          {result.clauses.length > 0 && (
-            <div style={{textAlign:'center', marginTop:24, paddingTop:24, borderTop:'1px solid var(--border)'}}>
-              <button className="btn secondary" onClick={downloadReport}>
-                <Download className="inline-block w-3 h-3 mr-2" />Download Report
-              </button>
-            </div>
-          )}
-        </section>
+                  ))}
+                </div>
+              </>
+            )}
+            
+            {result.clauses.length > 0 && (
+              <div style={{
+                textAlign: 'center',
+                marginTop: '32px',
+                paddingTop: '24px',
+                borderTop: '1px solid var(--border)'
+              }}>
+                <button className="btn secondary" onClick={downloadReport} style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '12px 24px'
+                }}>
+                  <Download className="w-4 h-4" />
+                  Download Report
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {/* KEY RISK INSIGHTS VIEW */}
       {mode==='line' && result && (
-        <section className="panel" style={{padding:0, marginTop:20, background:'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', borderRadius:'20px', overflow:'hidden'}}>
+        <div className="fade-in" style={{ marginTop: '32px' }}>
           {/* Header */}
-          <div style={{
-            background:'rgba(255,255,255,0.95)', 
-            padding:'32px', 
-            borderBottom:'1px solid rgba(0,0,0,0.1)'
-          }}>
-            <div style={{textAlign:'center', marginBottom:16}}>
-              <h2 style={{
-                margin:0, 
-                fontSize:'28px', 
-                fontWeight:'700', 
-                background:'linear-gradient(135deg, #667eea, #764ba2)',
-                WebkitBackgroundClip:'text',
-                WebkitTextFillColor:'transparent',
-                backgroundClip:'text'
-              }}>
-                <AlertTriangle className="inline-block w-6 h-6 mr-3" style={{color:'#f59e0b'}} />
-                Key Risk Insights
-              </h2>
+          <div className="glass-card" style={{ padding: '32px', marginBottom: '24px' }}>
+            <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', marginBottom: '16px' }}>
+                <AlertTriangle className="w-6 h-6" style={{ color: 'var(--accent)' }} />
+                <h2 style={{
+                  margin: 0,
+                  fontSize: '28px',
+                  fontWeight: '700',
+                  color: 'var(--text)'
+                }}>
+                  Key Risk Insights
+                </h2>
+              </div>
               <p style={{
-                fontSize:'16px', 
-                color:'#6b7280', 
-                margin:'8px 0 0 0',
-                fontWeight:'500'
+                fontSize: '16px',
+                color: 'var(--text-secondary)',
+                margin: '0 0 24px 0',
+                fontWeight: '500'
               }}>
                 Top {Math.min(result.clauses.filter(c=>c.risk!=='low').length, 10)} most critical clauses requiring your attention
               </p>
-          </div>
-          
+            </div>
+            
             {/* Risk Stats */}
             <div style={{
-              display:'flex', 
-              justifyContent:'center', 
-              gap:'24px', 
-              flexWrap:'wrap'
+              display: 'flex',
+              justifyContent: 'center',
+              gap: '32px',
+              flexWrap: 'wrap',
+              background: 'var(--glass-bg)',
+              padding: '24px',
+              borderRadius: '12px',
+              border: '1px solid var(--glass-border)',
+              backdropFilter: 'blur(10px)',
+              WebkitBackdropFilter: 'blur(10px)'
             }}>
-              <div style={{textAlign:'center'}}>
-                <div style={{fontSize:'24px', fontWeight:'700', color:'#ef4444'}}>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '32px', fontWeight: '700', color: 'var(--danger)' }}>
                   {result.clauses.filter(c=>c.risk==='high').length}
                 </div>
-                <div style={{fontSize:'12px', color:'#6b7280', textTransform:'uppercase', fontWeight:'600'}}>High Risk</div>
+                <div style={{ fontSize: '12px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: '600', letterSpacing: '0.5px' }}>
+                  High Risk
+                </div>
               </div>
-              <div style={{textAlign:'center'}}>
-                <div style={{fontSize:'24px', fontWeight:'700', color:'#f59e0b'}}>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '32px', fontWeight: '700', color: 'var(--warn)' }}>
                   {result.clauses.filter(c=>c.risk==='medium').length}
                 </div>
-                <div style={{fontSize:'12px', color:'#6b7280', textTransform:'uppercase', fontWeight:'600'}}>Medium Risk</div>
+                <div style={{ fontSize: '12px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: '600', letterSpacing: '0.5px' }}>
+                  Medium Risk
+                </div>
               </div>
-              <div style={{textAlign:'center'}}>
-                <div style={{fontSize:'24px', fontWeight:'700', color:'#10b981'}}>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '32px', fontWeight: '700', color: 'var(--success)' }}>
                   {result.clauses.filter(c=>c.risk==='low').length}
                 </div>
-                <div style={{fontSize:'12px', color:'#6b7280', textTransform:'uppercase', fontWeight:'600'}}>Low Risk</div>
+                <div style={{ fontSize: '12px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: '600', letterSpacing: '0.5px' }}>
+                  Low Risk
+                </div>
               </div>
             </div>
-                </div>
+          </div>
                 
-          {/* Content */}
-          <div style={{padding:'32px', background:'rgba(255,255,255,0.98)'}}>
-            <div style={{
-              display:'grid', 
-              gap:'24px', 
-              maxWidth:'1200px', 
-              margin:'0 auto'
-            }}>
-              {result.clauses
-                .filter(c => c.risk !== 'low')
-                .slice(0, 10)
-                .map((cl: Clause, index: number) => (
-                <div key={cl.id} style={{
-                  background:'white',
-                  borderRadius:'16px',
-                  padding:'28px',
-                  boxShadow:'0 8px 32px rgba(0,0,0,0.08)',
-                  border:'1px solid rgba(0,0,0,0.05)',
-                  position:'relative',
-                  overflow:'hidden'
+          {/* Content - 2 Column Grid */}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(500px, 1fr))',
+            gap: '24px',
+            maxWidth: '1400px',
+            margin: '0 auto'
+          }}>
+            {result.clauses
+              .filter(c => c.risk !== 'low')
+              .slice(0, 10)
+              .map((cl: Clause, index: number) => (
+              <div key={cl.id} className="glass-card" style={{
+                padding: '24px',
+                position: 'relative'
+              }}>
+                {/* Risk Badge */}
+                <div style={{
+                  position: 'absolute',
+                  top: '16px',
+                  right: '16px'
                 }}>
-                  {/* Priority Badge */}
+                  <span className={`risk ${cl.risk.toLowerCase()}`}>
+                    {cl.risk.toUpperCase()}
+                  </span>
+                </div>
+                
+                {/* Priority Number */}
+                <div style={{
+                  position: 'absolute',
+                  top: '-8px',
+                  left: '16px',
+                  background: 'var(--accent)',
+                  color: 'white',
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '14px',
+                  fontWeight: '700',
+                  boxShadow: '0 4px 12px var(--accent-glow)'
+                }}>
+                  {index + 1}
+                </div>
+                
+                <div style={{ marginTop: '16px' }}>
+                  <h3 style={{
+                    margin: '0 0 20px 0',
+                    fontSize: '18px',
+                    fontWeight: '600',
+                    color: 'var(--text)',
+                    lineHeight: '1.3',
+                    paddingRight: '80px'
+                  }}>
+                    {cl.title}
+                  </h3>
+                  
+                  {/* 2 Column Layout for Content */}
                   <div style={{
-                    position:'absolute',
-                    top:'20px',
-                    right:'20px',
-                    background: cl.risk === 'high' ? '#fee2e2' : '#fef3c7',
-                    color: cl.risk === 'high' ? '#dc2626' : '#d97706',
-                    padding:'6px 12px',
-                    borderRadius:'20px',
-                    fontSize:'12px',
-                    fontWeight:'700',
-                    textTransform:'uppercase',
-                    display:'flex',
-                    alignItems:'center',
-                    gap:'6px'
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gap: '16px'
                   }}>
-                    {cl.risk === 'high' ? '🔴' : '🟡'} {cl.risk} Risk
-                  </div>
-                  
-                  {/* Priority Number */}
-                <div style={{
-                    position:'absolute',
-                    top:'-10px',
-                    left:'20px',
-                    background:'linear-gradient(135deg, #667eea, #764ba2)',
-                    color:'white',
-                    width:'40px',
-                    height:'40px',
-                    borderRadius:'50%',
-                    display:'flex',
-                    alignItems:'center',
-                    justifyContent:'center',
-                    fontSize:'16px',
-                    fontWeight:'700',
-                    boxShadow:'0 4px 12px rgba(102, 126, 234, 0.3)'
-                  }}>
-                    {index + 1}
-                  </div>
-                  
-                  <div style={{marginTop:'12px'}}>
-                    <h3 style={{
-                      margin:'0 0 16px 0', 
-                      fontSize:'20px', 
-                      fontWeight:'600', 
-                      color:'#1f2937',
-                      lineHeight:'1.3'
-                    }}>
-                      {cl.title}
-                    </h3>
-                    
-                    {/* Original Clause */}
+                    {/* Left Column - Original Clause */}
                     <div style={{
-                      background:'#f8fafc',
-                      padding:'20px',
-                  borderRadius:'12px',
-                      borderLeft:'4px solid #3b82f6',
-                      marginBottom:'20px'
+                      background: 'var(--glass-bg)',
+                      padding: '16px',
+                      borderRadius: '8px',
+                      border: '1px solid var(--glass-border)',
+                      backdropFilter: 'blur(10px)',
+                      WebkitBackdropFilter: 'blur(10px)'
                     }}>
                       <div style={{
-                        fontSize:'12px', 
-                        fontWeight:'600', 
-                        color:'#3b82f6', 
-                        marginBottom:'12px',
-                        textTransform:'uppercase',
-                        display:'flex',
-                        alignItems:'center',
-                        gap:'6px'
+                        fontSize: '11px',
+                        fontWeight: '600',
+                        color: 'var(--accent)',
+                        marginBottom: '8px',
+                        textTransform: 'uppercase',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px'
                       }}>
-                        <FileText className="inline-block w-4 h-4" />
-                        Original Legal Clause
-                  </div>
-                      <div style={{
-                        fontSize:'14px',
-                        lineHeight:'1.6',
-                        color:'#374151',
-                        fontFamily:'ui-monospace, SFMono-Regular, monospace'
-                      }}>
-                        "{cl.original}"
+                        <FileText className="w-3 h-3" />
+                        Original Clause
                       </div>
-                </div>
-                
-                    {/* Plain English */}
-                <div style={{
-                      background:'linear-gradient(135deg, #ecfdf5, #f0fdf4)',
-                      padding:'20px',
-                  borderRadius:'12px',
-                      borderLeft:'4px solid #10b981',
-                      marginBottom:'20px'
-                    }}>
                       <div style={{
-                        fontSize:'12px', 
-                        fontWeight:'600', 
-                        color:'#059669', 
-                        marginBottom:'12px',
-                        textTransform:'uppercase',
-                        display:'flex',
-                        alignItems:'center',
-                        gap:'6px'
+                        fontSize: '12px',
+                        lineHeight: '1.5',
+                        color: 'var(--text-secondary)',
+                        fontFamily: 'ui-monospace, SFMono-Regular, monospace'
                       }}>
-                        <Sparkles className="inline-block w-4 h-4" />
-                        In Plain English
-                  </div>
-                      <div style={{
-                        fontSize:'16px',
-                        lineHeight:'1.6',
-                        color:'#065f46',
-                        fontWeight:'500'
-                      }}>
-                        {cl.simple}
-                      </div>
-                </div>
-                
-                    {/* Impact & Action */}
-                    <div style={{
-                      background:'linear-gradient(135deg, #fef7ff, #fdf4ff)',
-                      padding:'20px',
-                      borderRadius:'12px',
-                      borderLeft:'4px solid #8b5cf6'
-                    }}>
-                      <div style={{
-                        fontSize:'12px', 
-                        fontWeight:'600', 
-                        color:'#7c3aed', 
-                        marginBottom:'12px',
-                        textTransform:'uppercase',
-                        display:'flex',
-                        alignItems:'center',
-                        gap:'6px'
-                      }}>
-                        <Lightbulb className="inline-block w-4 h-4" />
-                        Why This Matters & What You Can Do
-                  </div>
-                      <div style={{
-                        fontSize:'15px',
-                        lineHeight:'1.6',
-                        color:'#581c87',
-                        fontWeight:'500'
-                      }}>
-                        {cl.why}
+                        &quot;{cl.original}&quot;
                       </div>
                     </div>
+                    
+                    {/* Right Column - AI Explanations */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      {/* Plain English */}
+                      <div style={{
+                        background: 'rgba(16, 185, 129, 0.1)',
+                        padding: '16px',
+                        borderRadius: '8px',
+                        border: '1px solid rgba(16, 185, 129, 0.2)'
+                      }}>
+                        <div style={{
+                          fontSize: '11px',
+                          fontWeight: '600',
+                          color: 'var(--success)',
+                          marginBottom: '8px',
+                          textTransform: 'uppercase',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px'
+                        }}>
+                          <Check className="w-3 h-3" />
+                          Plain English
+                        </div>
+                        <div 
+                          style={{
+                            fontSize: '13px',
+                            lineHeight: '1.5',
+                            color: 'var(--text)',
+                            fontWeight: '500'
+                          }}
+                          dangerouslySetInnerHTML={{__html: DOMPurify.sanitize(formatText(cl.simple))}}
+                        />
+        </div>
+                      
+                      {/* Why it Matters */}
+                      <div style={{
+                        background: 'rgba(124, 58, 237, 0.1)',
+                        padding: '16px',
+                        borderRadius: '8px',
+                        border: '1px solid rgba(124, 58, 237, 0.2)'
+                      }}>
+                        <div style={{
+                          fontSize: '11px',
+                          fontWeight: '600',
+                          color: 'var(--accent)',
+                          marginBottom: '8px',
+                          textTransform: 'uppercase',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px'
+                        }}>
+                          <Lightbulb className="w-3 h-3" />
+                          Why it Matters
+      </div>
+                        <div 
+                          style={{
+                            fontSize: '13px',
+                            lineHeight: '1.5',
+                            color: 'var(--text)',
+                            fontWeight: '500'
+                          }}
+                          dangerouslySetInnerHTML={{__html: DOMPurify.sanitize(formatText(cl.why))}}
+                        />
+    </div>
+                    </div>
                   </div>
+                </div>
               </div>
             ))}
           </div>
           
-            {/* Action Bar */}
-            <div style={{
-              textAlign:'center', 
-              marginTop:'40px', 
-              paddingTop:'32px', 
-              borderTop:'2px solid rgba(0,0,0,0.05)'
-            }}>
-              <div style={{display:'flex', justifyContent:'center', gap:'16px', flexWrap:'wrap'}}>
-                <button 
-                  className="btn secondary" 
-                  onClick={downloadReport}
-                  style={{
-                    padding:'12px 24px',
-                    fontSize:'14px',
-                    fontWeight:'600',
-                    borderRadius:'12px'
-                  }}
-                >
-                  <Download className="inline-block w-4 h-4 mr-2" />
-                  Download Report
-            </button>
-                <button 
-                  className="btn" 
-                  onClick={()=>setMode('canvas')}
-                  style={{
-                    background:'linear-gradient(135deg, #667eea, #764ba2)',
-                    border:'none',
-                    padding:'12px 24px',
-                    fontSize:'14px',
-                    fontWeight:'600',
-                    borderRadius:'12px'
-                  }}
-                >
-                  <FileText className="inline-block w-4 h-4 mr-2" />
-                  View Page-by-Page Analysis
-            </button>
-              </div>
+          {/* Action Bar */}
+          <div className="glass-card" style={{
+            textAlign: 'center',
+            marginTop: '32px',
+            padding: '24px'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '16px', flexWrap: 'wrap' }}>
+    <button
+                className="btn secondary"
+                onClick={downloadReport}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '12px 24px'
+                }}
+              >
+                <Download className="w-4 h-4" />
+                Download Report
+    </button>
+              
+              <button
+                className="btn"
+                onClick={()=>setMode('canvas')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '12px 24px'
+                }}
+              >
+                <FileText className="w-4 h-4" />
+                View Page-by-Page Analysis
+              </button>
             </div>
           </div>
-        </section>
+        </div>
       )}
 
       {/* PAGE-BY-PAGE ANALYSIS VIEW - FULL SCREEN */}
@@ -1130,15 +1273,17 @@ export default function HomePage() {
           left: 0,
           width: '100vw',
           height: '100vh',
-          background: '#f8fafc',
+          background: 'var(--bg-gradient)',
           zIndex: 1000,
           display: 'grid',
           gridTemplateColumns: '1fr 1fr'
         }}>
           {/* Left Side - PDF Viewer (Full Height) */}
           <div style={{
-            background: 'white',
-            borderRight: '1px solid #e5e7eb',
+            background: 'var(--panel)',
+            backdropFilter: 'blur(20px)',
+            WebkitBackdropFilter: 'blur(20px)',
+            borderRight: '1px solid var(--panel-border)',
             overflow: 'hidden',
             display: 'flex',
             flexDirection: 'column'
@@ -1152,7 +1297,7 @@ export default function HomePage() {
           
           {/* Right Side - Page Analysis Panel */}
           <div style={{
-            background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(248, 250, 252, 0.95))',
+            background: 'var(--panel)',
             backdropFilter: 'blur(20px)',
             WebkitBackdropFilter: 'blur(20px)',
             padding: '24px',
@@ -1172,9 +1317,13 @@ export default function HomePage() {
                 margin: 0,
                 fontSize: '18px',
                 fontWeight: '700',
-                color: '#1f2937'
+                color: 'var(--text)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
               }}>
-                📄 Page {currentPage} Analysis
+                <FileText className="w-5 h-5" style={{ color: 'var(--accent)' }} />
+                Page {currentPage} Analysis
               </h3>
               <div style={{
                 display: 'flex',
@@ -1183,34 +1332,14 @@ export default function HomePage() {
               }}>
                 <button 
                   onClick={addToNotes}
+                  className="btn secondary"
                   style={{
-                    background: 'rgba(255, 255, 255, 0.25)',
-                    backdropFilter: 'blur(15px)',
-                    WebkitBackdropFilter: 'blur(15px)',
-                    color: '#1e40af',
-                    border: '1px solid rgba(30, 64, 175, 0.2)',
-                    padding: '8px 14px',
-                    borderRadius: '12px',
-                    fontSize: '13px',
-                    fontWeight: '600',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s ease',
-                    boxShadow: '0 4px 15px rgba(30, 64, 175, 0.1)',
-                    width: 'fit-content',
-                    whiteSpace: 'nowrap',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '6px'
-                  }}
-                  onMouseOver={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-1px)';
-                    e.currentTarget.style.background = 'rgba(255, 255, 255, 0.35)';
-                    e.currentTarget.style.boxShadow = '0 8px 25px rgba(30, 64, 175, 0.2)';
-                  }}
-                  onMouseOut={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0)';
-                    e.currentTarget.style.background = 'rgba(255, 255, 255, 0.25)';
-                    e.currentTarget.style.boxShadow = '0 4px 15px rgba(30, 64, 175, 0.1)';
+                    gap: '6px',
+                    padding: '8px 14px',
+                    fontSize: '13px',
+                    fontWeight: '600'
                   }}
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1223,69 +1352,51 @@ export default function HomePage() {
                 </button>
                 <button
                   onClick={() => setMode('none')}
+                  className="btn secondary"
                   style={{
-                    background: 'rgba(255, 255, 255, 0.2)',
-                    backdropFilter: 'blur(10px)',
-                    WebkitBackdropFilter: 'blur(10px)',
-                    border: '1px solid rgba(255, 255, 255, 0.3)',
-                    borderRadius: '12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
                     padding: '8px 16px',
-                    cursor: 'pointer',
                     fontSize: '14px',
-                    fontWeight: '600',
-                    color: '#475569',
-                    transition: 'all 0.2s ease'
-                  }}
-                  onMouseOver={(e) => {
-                    e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)';
-                    e.currentTarget.style.transform = 'translateY(-1px)';
-                  }}
-                  onMouseOut={(e) => {
-                    e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)';
-                    e.currentTarget.style.transform = 'translateY(0)';
+                    fontWeight: '600'
                   }}
                 >
-                  ✕ Close
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"/>
+                    <line x1="6" y1="6" x2="18" y2="18"/>
+                  </svg>
+                  Close
                 </button>
               </div>
             </div>
             
             {/* Page Summary */}
-            <div style={{
-              background: 'rgba(255, 255, 255, 0.6)',
-              backdropFilter: 'blur(10px)',
-              WebkitBackdropFilter: 'blur(10px)',
-              padding: '20px',
-              borderRadius: '16px',
-              border: '1px solid rgba(255, 255, 255, 0.3)'
+            <div className="glass-card" style={{
+              padding: '20px'
             }}>
               <h4 style={{
                 margin: '0 0 12px 0',
                 fontSize: '16px',
                 fontWeight: '600',
-                color: '#334155',
+                color: 'var(--text)',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '8px'
               }}>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                  <polyline points="14,2 14,8 20,8"/>
-                  <line x1="16" y1="13" x2="8" y2="13"/>
-                  <line x1="16" y1="17" x2="8" y2="17"/>
-                  <polyline points="10,9 9,9 8,9"/>
-                </svg>
+                <BarChart3 className="w-5 h-5" style={{ color: 'var(--accent)' }} />
                 Page Summary
               </h4>
-              <p style={{
-                margin: 0,
-                fontSize: '14px',
-                color: '#64748b',
-                lineHeight: '1.6'
-              }}>
-                {currentPageContent.summary}
-              </p>
-            </div>
+              <div 
+                style={{
+                  margin: 0,
+                  fontSize: '14px',
+                  color: 'var(--text-secondary)',
+                  lineHeight: '1.6'
+                }}
+                dangerouslySetInnerHTML={{__html: DOMPurify.sanitize(formatText(currentPageContent.summary))}}
+      />
+    </div>
 
             {/* Risk Stats */}
             <div style={{
@@ -1293,47 +1404,38 @@ export default function HomePage() {
               gridTemplateColumns: 'repeat(3, 1fr)',
               gap: '12px'
             }}>
-              <div style={{
-                background: 'rgba(239, 68, 68, 0.1)',
-                backdropFilter: 'blur(10px)',
-                WebkitBackdropFilter: 'blur(10px)',
+              <div className="glass-card" style={{
                 padding: '16px',
-                borderRadius: '12px',
                 textAlign: 'center',
-                border: '1px solid rgba(239, 68, 68, 0.2)'
+                background: 'rgba(220, 38, 38, 0.1)',
+                border: '1px solid rgba(220, 38, 38, 0.2)'
               }}>
-                <div style={{fontSize: '24px', fontWeight: '700', color: '#dc2626'}}>
+                <div style={{fontSize: '24px', fontWeight: '700', color: 'var(--danger)'}}>
                   {currentPageContent.high.length}
                 </div>
-                <div style={{fontSize: '12px', color: '#64748b', fontWeight: '600'}}>HIGH</div>
+                <div style={{fontSize: '12px', color: 'var(--text-secondary)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.5px'}}>HIGH</div>
               </div>
-              <div style={{
-                background: 'rgba(245, 158, 11, 0.1)',
-                backdropFilter: 'blur(10px)',
-                WebkitBackdropFilter: 'blur(10px)',
+              <div className="glass-card" style={{
                 padding: '16px',
-                borderRadius: '12px',
                 textAlign: 'center',
+                background: 'rgba(245, 158, 11, 0.1)',
                 border: '1px solid rgba(245, 158, 11, 0.2)'
               }}>
-                <div style={{fontSize: '24px', fontWeight: '700', color: '#d97706'}}>
+                <div style={{fontSize: '24px', fontWeight: '700', color: 'var(--warn)'}}>
                   {currentPageContent.medium.length}
                 </div>
-                <div style={{fontSize: '12px', color: '#64748b', fontWeight: '600'}}>MEDIUM</div>
+                <div style={{fontSize: '12px', color: 'var(--text-secondary)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.5px'}}>MEDIUM</div>
               </div>
-              <div style={{
-                background: 'rgba(34, 197, 94, 0.1)',
-                backdropFilter: 'blur(10px)',
-                WebkitBackdropFilter: 'blur(10px)',
+              <div className="glass-card" style={{
                 padding: '16px',
-                borderRadius: '12px',
                 textAlign: 'center',
-                border: '1px solid rgba(34, 197, 94, 0.2)'
+                background: 'rgba(16, 185, 129, 0.1)',
+                border: '1px solid rgba(16, 185, 129, 0.2)'
               }}>
-                <div style={{fontSize: '24px', fontWeight: '700', color: '#059669'}}>
+                <div style={{fontSize: '24px', fontWeight: '700', color: 'var(--success)'}}>
                   {currentPageContent.low.length}
                 </div>
-                <div style={{fontSize: '12px', color: '#64748b', fontWeight: '600'}}>LOW</div>
+                <div style={{fontSize: '12px', color: 'var(--text-secondary)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.5px'}}>LOW</div>
               </div>
             </div>
 
@@ -1372,39 +1474,39 @@ export default function HomePage() {
                     const getIcon = (type: string) => {
                       switch (type) {
                         case 'high':
-                          return (
+  return (
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                               <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
                               <line x1="12" y1="9" x2="12" y2="13"/>
                               <line x1="12" y1="17" x2="12.01" y2="17"/>
-                            </svg>
-                          );
+    </svg>
+  );
                         case 'medium':
-                          return (
+  return (
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#d97706" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                               <circle cx="12" cy="12" r="10"/>
                               <line x1="12" y1="8" x2="12" y2="12"/>
                               <line x1="12" y1="16" x2="12.01" y2="16"/>
-                            </svg>
-                          );
+    </svg>
+  );
                         case 'low':
-                          return (
+  return (
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                               <polyline points="20 6 9 17 4 12"/>
-                            </svg>
-                          );
+    </svg>
+  );
                         default:
-                          return (
+  return (
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                               <circle cx="12" cy="12" r="10"/>
                               <line x1="12" y1="16" x2="12" y2="12"/>
                               <line x1="12" y1="8" x2="12.01" y2="8"/>
-                            </svg>
-                          );
-                      }
+    </svg>
+  );
+}
                     };
                     
-                    return (
+  return (
                       <div key={idx} style={{
                         padding: '14px 18px',
                         background: 'rgba(255, 255, 255, 0.5)',
@@ -1430,14 +1532,15 @@ export default function HomePage() {
                             }}>
                               {point.title}
                             </h6>
-                            <p style={{
-                              margin: 0,
-                              fontSize: '14px',
-                              color: '#64748b',
-                              lineHeight: '1.5'
-                            }}>
-                              {point.explanation}
-                            </p>
+                            <div 
+                              style={{
+                                margin: 0,
+                                fontSize: '14px',
+                                color: '#64748b',
+                                lineHeight: '1.5'
+                              }}
+                              dangerouslySetInnerHTML={{__html: DOMPurify.sanitize(formatText(point.explanation))}}
+                            />
                           </div>
                         </div>
                       </div>
@@ -1470,7 +1573,7 @@ export default function HomePage() {
                     <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
                     <line x1="12" y1="9" x2="12" y2="13"/>
                     <line x1="12" y1="17" x2="12.01" y2="17"/>
-                  </svg>
+    </svg>
                   Critical Risks on Page {currentPage}
                 </h4>
                 {currentPageContent.high.slice(0, 2).map((item, idx) => (
@@ -1491,13 +1594,14 @@ export default function HomePage() {
                     }}>
                       {item.title}
                     </div>
-                    <div style={{
-                      color: '#64748b', 
-                      lineHeight: '1.5',
-                      fontSize: '13px'
-                    }}>
-                      {item.simple}
-                    </div>
+                    <div 
+                      style={{
+                        color: '#64748b', 
+                        lineHeight: '1.5',
+                        fontSize: '13px'
+                      }}
+                      dangerouslySetInnerHTML={{__html: DOMPurify.sanitize(formatText(item.simple))}}
+                    />
                   </div>
                 ))}
               </div>
@@ -1667,56 +1771,373 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* ASK A DOUBT */}
+      {/* CHAT INTERFACE */}
       {mode==='ask' && (
-        <section className="panel" style={{padding:32, marginTop:20}}>
-          <div style={{textAlign:'center', marginBottom:24}}>
-            <h3><MessageCircle className="inline-block w-4 h-4 mr-2" />Ask a Question</h3>
-            {!result && <p className="muted"><Lightbulb className="inline-block w-3 h-3 mr-1" />Analyze a document first for better context-aware answers</p>}
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '100vw',
+          height: '100vh',
+          background: 'rgba(248, 250, 252, 0.95)',
+          backdropFilter: 'blur(20px)',
+          WebkitBackdropFilter: 'blur(20px)',
+          zIndex: 1000,
+          display: 'flex',
+          flexDirection: 'column'
+        }}>
+          {/* Header */}
+          <div className="glass-card" style={{
+            margin: '16px',
+            padding: '20px 24px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{
+                width: '40px',
+                height: '40px',
+                borderRadius: '50%',
+                background: 'transparent',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}>
+                <Image 
+                  src="/zap logo Background Removed copy.png" 
+                  alt="Lucid AI Logo" 
+                  width={32}
+                  height={32}
+                />
+              </div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: 'var(--text)' }}>
+                  Lucid AI
+                </h3>
+                <p style={{ margin: 0, fontSize: '14px', color: 'var(--text-secondary)' }}>
+                  {file ? 'Ask questions about your document' : 'Upload a document to get started'}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                setMode('none');
+                setMessages([]); // Clear conversation history
+                setAnswer('');
+                setQuestion('');
+              }}
+              className="btn secondary"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '8px 12px',
+                fontSize: '14px'
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"/>
+                <line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+              Close
+            </button>
           </div>
           
-          <div style={{maxWidth:'600px', margin:'0 auto'}}>
-            <textarea 
-              rows={4} 
-              placeholder="e.g., What happens if I miss a payment? Can I terminate early? What are the hidden fees?"
-              value={question} 
-              onChange={e=>setQuestion(e.target.value)}
-              style={{
-                resize: 'vertical',
-                minHeight: '100px',
-                fontSize: '16px'
-              }}
-            />
-            
-            <div style={{marginTop:16, textAlign:'center'}}>
-              <button 
-                className="btn" 
-                onClick={handleAsk} 
-                disabled={!question || !!progress}
-                style={{minWidth:'120px'}}
-              >
-                {progress ? <><Brain className="inline-block w-3 h-3 mr-1" />Thinking...</> : <><Rocket className="inline-block w-3 h-3 mr-1" />Ask</>}
-              </button>
-            </div>
-            
-            {answer && (
+          {/* Chat Messages */}
+          <div style={{
+            flex: 1,
+            overflowY: 'auto',
+            padding: '16px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px'
+          }}>
+            {/* Welcome Message */}
+            {messages.length === 0 && !progress && (
               <div style={{
-                marginTop:24, 
-                background:'rgba(255, 255, 255, 0.6)', 
-                padding:'24px', 
-                borderRadius:'16px',
-                borderLeft:'4px solid var(--accent)',
-                whiteSpace:'pre-wrap',
-                lineHeight:'1.7'
+                padding: '16px',
+                textAlign: 'center',
+                background: 'var(--glass-bg)',
+                backdropFilter: 'blur(10px)',
+                WebkitBackdropFilter: 'blur(10px)',
+                borderRadius: '12px',
+                border: '1px solid var(--glass-border)'
               }}>
-                <div style={{fontSize:12, fontWeight:600, color:'var(--accent)', marginBottom:12, textTransform:'uppercase'}}>
-                  <Bot className="inline-block w-3 h-3 mr-1" />Answer
+                <div style={{
+                  width: '48px',
+                  height: '48px',
+                  borderRadius: '50%',
+                  background: 'transparent',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  margin: '0 auto 16px'
+                }}>
+                  <Image 
+                    src="/zap logo Background Removed copy.png" 
+                    alt="Lucid AI Logo" 
+                    width={40}
+                    height={40}
+                  />
                 </div>
-                {answer}
+                <h4 style={{ margin: '0 0 8px 0', fontSize: '16px', fontWeight: '600', color: 'var(--text)' }}>
+                  {file ? 'Ready to help!' : 'Upload a document first'}
+                </h4>
+                <p style={{ margin: 0, fontSize: '14px', color: 'var(--text-secondary)' }}>
+                  {file 
+                    ? 'Ask me anything about your document. I can explain clauses, risks, and help you understand what you\'re signing.'
+                    : 'To get the best answers, please upload and analyze a document first using the options above.'
+                  }
+                </p>
               </div>
             )}
+
+            {/* Conversation Messages */}
+            {messages.map((message) => (
+              <div key={message.id} style={{
+                display: 'flex',
+                justifyContent: message.type === 'user' ? 'flex-end' : 'flex-start',
+                marginBottom: '8px'
+              }}>
+                <div style={{
+                  background: message.type === 'user' 
+                    ? 'var(--accent)'
+                    : 'var(--glass-bg)',
+                  color: message.type === 'user' ? 'white' : 'var(--text)',
+                  padding: '12px 16px',
+                  borderRadius: '16px',
+                  maxWidth: '75%',
+                  fontSize: '14px',
+                  lineHeight: '1.5',
+                  backdropFilter: 'blur(10px)',
+                  WebkitBackdropFilter: 'blur(10px)',
+                  border: message.type === 'user' 
+                    ? 'none'
+                    : '1px solid var(--glass-border)',
+                  opacity: (message as any).isTyping ? 0.8 : 1
+                }}>
+                  {(message as any).isTyping ? (
+                    <div className="typing-indicator">
+                      <div className="typing-dots">
+                        <div className="typing-dot"></div>
+                        <div className="typing-dot"></div>
+                        <div className="typing-dot"></div>
+                      </div>
+                      <span>{message.content}</span>
+                    </div>
+                  ) : (
+                    <>
+                      <div 
+                        dangerouslySetInnerHTML={{ 
+                          __html: formatMessage(message.content) 
+                        }}
+                        style={{
+                          wordBreak: 'break-word'
+                        }}
+                      />
+                      <div style={{
+                        fontSize: '11px',
+                        opacity: 0.7,
+                        marginTop: '8px',
+                        textAlign: 'right'
+                      }}>
+                        {message.timestamp.toLocaleTimeString()}
+                      </div>
+                      
+                      {/* Message Actions - Only for assistant messages */}
+                      {message.type === 'assistant' && !(message as any).isTyping && (
+                        <div style={{
+                          display: 'flex',
+                          gap: '8px',
+                          marginTop: '8px',
+                          justifyContent: 'flex-end',
+                          alignItems: 'center'
+                        }}>
+                          <button
+                            onClick={() => handleFeedback(message.id, 'like')}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              cursor: 'pointer',
+                              padding: '4px',
+                              borderRadius: '4px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              opacity: messageFeedback[message.id] === 'like' ? 1 : 0.5,
+                              transition: 'all 0.2s ease'
+                            }}
+                            title="Like this response"
+                          >
+                            <ThumbsUp 
+                              size={14} 
+                              style={{ 
+                                color: messageFeedback[message.id] === 'like' ? '#10B981' : 'currentColor' 
+                              }} 
+                            />
+                          </button>
+                          
+                          <button
+                            onClick={() => handleFeedback(message.id, 'dislike')}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              cursor: 'pointer',
+                              padding: '4px',
+                              borderRadius: '4px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              opacity: messageFeedback[message.id] === 'dislike' ? 1 : 0.5,
+                              transition: 'all 0.2s ease'
+                            }}
+                            title="Dislike this response"
+                          >
+                            <ThumbsDown 
+                              size={14} 
+                              style={{ 
+                                color: messageFeedback[message.id] === 'dislike' ? '#EF4444' : 'currentColor' 
+                              }} 
+                            />
+                          </button>
+                          
+                          <button
+                            onClick={() => handleCopyMessage(message.content)}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              cursor: 'pointer',
+                              padding: '4px',
+                              borderRadius: '4px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              opacity: 0.5,
+                              transition: 'all 0.2s ease'
+                            }}
+                            title="Copy message"
+                          >
+                            <Copy size={14} />
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+
+            {/* Loading State - Removed duplicate progress message */}
           </div>
-        </section>
+
+          {/* Input Area */}
+          <div className="glass-card" style={{
+            margin: '16px',
+            padding: '20px 24px'
+          }}>
+            <div style={{
+              maxWidth: '800px',
+              margin: '0 auto',
+              display: 'flex',
+              gap: '12px',
+              alignItems: 'flex-end'
+            }}>
+              <div style={{ flex: 1 }}>
+                <textarea 
+                  value={question} 
+                  onChange={e => setQuestion(e.target.value)}
+                  placeholder={file 
+                    ? "Ask me anything about your document..." 
+                    : "Upload a document first to ask questions..."
+                  }
+                  disabled={!file}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      if (question.trim() && !progress) {
+                        handleAsk();
+                      }
+                    }
+                  }}
+                  style={{
+                    width: '100%',
+                    minHeight: '44px',
+                    maxHeight: '120px',
+                    padding: '12px 16px',
+                    border: '1px solid var(--glass-border)',
+                    borderRadius: '12px',
+                    fontSize: '14px',
+                    lineHeight: '1.5',
+                    resize: 'none',
+                    outline: 'none',
+                    fontFamily: 'inherit',
+                    background: file ? 'var(--glass-bg)' : 'var(--glass-bg)',
+                    color: file ? 'var(--text)' : 'var(--muted)',
+                    transition: 'all 200ms ease-in-out',
+                    backdropFilter: 'blur(10px)',
+                    WebkitBackdropFilter: 'blur(10px)'
+                  }}
+                  onFocus={(e) => {
+                    e.target.style.borderColor = 'var(--accent)';
+                    e.target.style.boxShadow = '0 0 0 3px var(--accent-glow)';
+                  }}
+                  onBlur={(e) => {
+                    e.target.style.borderColor = 'var(--glass-border)';
+                    e.target.style.boxShadow = 'none';
+                  }}
+                />
+              </div>
+              <button 
+                onClick={handleAsk} 
+                disabled={!question.trim() || !!progress || !file}
+                className="btn"
+                style={{
+                  borderRadius: '12px',
+                  width: '44px',
+                  height: '44px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: 0
+                }}
+              >
+                {progress ? (
+                  <div style={{
+                    width: '16px',
+                    height: '16px',
+                    border: '2px solid transparent',
+                    borderTop: '2px solid currentColor',
+                    borderRadius: '50%',
+                    animation: 'spin 1s linear infinite'
+                  }} />
+                ) : (
+                  <svg 
+                    width="20" 
+                    height="20" 
+                    viewBox="0 0 24 24" 
+                    fill="none" 
+                    stroke="currentColor" 
+                    strokeWidth="2" 
+                    strokeLinecap="round" 
+                    strokeLinejoin="round"
+                    style={{ transform: 'translateX(1px)' }}
+                  >
+                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                    <polygon points="22,2 15,22 11,13 2,9 22,2"></polygon>
+                  </svg>
+                )}
+              </button>
+            </div>
+            </div>
+            
+          <style jsx>{`
+            @keyframes spin {
+              from { transform: rotate(0deg); }
+              to { transform: rotate(360deg); }
+            }
+          `}</style>
+              </div>
       )}
 
       {/* MY NOTES VIEW */}
@@ -1781,7 +2202,7 @@ export default function HomePage() {
               </svg>
               <h4 style={{color: '#64748b', marginBottom: '8px'}}>No notes yet</h4>
               <p style={{color: '#94a3b8', fontSize: '14px'}}>
-                Use "Add to My Notes" from the Page-by-Page Analysis to save important page information here.
+                Use &quot;Add to My Notes&quot; from the Page-by-Page Analysis to save important page information here.
               </p>
             </div>
           ) : (
@@ -1851,14 +2272,15 @@ export default function HomePage() {
                     }}>
                       Summary:
                     </h5>
-                    <p style={{
-                      margin: 0,
-                      fontSize: '14px',
-                      color: '#64748b',
-                      lineHeight: '1.6'
-                    }}>
-                      {note.summary}
-                    </p>
+                    <div 
+                      style={{
+                        margin: 0,
+                        fontSize: '14px',
+                        color: '#64748b',
+                        lineHeight: '1.6'
+                      }}
+                      dangerouslySetInnerHTML={{__html: DOMPurify.sanitize(formatText(note.summary))}}
+                    />
                   </div>
                   
                   {note.risks.length > 0 && (
@@ -1887,12 +2309,13 @@ export default function HomePage() {
                           }}>
                             <strong>{risk.title}</strong>
                             {risk.simple && (
-                              <div style={{
+                            <div 
+                              style={{
                                 marginTop: '4px',
                                 color: '#64748b'
-                              }}>
-                                {risk.simple}
-                              </div>
+                              }}
+                              dangerouslySetInnerHTML={{__html: DOMPurify.sanitize(formatText(risk.simple))}}
+                            />
                             )}
                           </div>
                         ))}
