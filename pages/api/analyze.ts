@@ -6,6 +6,7 @@ import { VertexAI } from '@google-cloud/vertexai';
 import pdf from 'pdf-parse';
 import type { AnalysisResult, RiskLevel, Segment } from '../../lib/types';
 import formidable from 'formidable';
+import fs from 'fs';
 
 const PROJECT_ID = process.env.GCP_PROJECT_ID;
 const LOCATION = process.env.GCP_LOCATION || 'us-central1';
