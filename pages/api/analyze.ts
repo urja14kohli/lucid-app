@@ -6,9 +6,6 @@ import { VertexAI } from '@google-cloud/vertexai';
 import pdf from 'pdf-parse';
 import type { AnalysisResult, RiskLevel, Segment } from '../../lib/types';
 import formidable from 'formidable';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
 
 const PROJECT_ID = process.env.GCP_PROJECT_ID;
 const LOCATION = process.env.GCP_LOCATION || 'us-central1';
@@ -31,55 +28,31 @@ let generativeModel: any = null;
 
 if (!MOCK_MODE) {
   try {
-    // Parse credentials from environment variable
-    let credentials;
-    if (process.env.GOOGLE_CREDENTIALS_JSON) {
-      credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
-      // Fix private key formatting - replace literal \n with actual newlines
-      if (credentials.private_key) {
-        credentials.private_key = credentials.private_key.replace(/\\n/g, '\n');
-        // Ensure proper key format - remove any extra whitespace and ensure proper line endings
-        credentials.private_key = credentials.private_key.trim();
-        if (!credentials.private_key.endsWith('\n')) {
-          credentials.private_key += '\n';
+    const credsJson = process.env.GOOGLE_CREDENTIALS_JSON;
+    
+    if (credsJson) {
+      const creds = JSON.parse(credsJson);
+      if (creds.private_key) {
+        creds.private_key = creds.private_key.replace(/\\n/g, '\n');
+      }
+
+      const common = {
+        projectId: PROJECT_ID,
+        credentials: { 
+          client_email: creds.client_email, 
+          private_key: creds.private_key 
         }
-      }
-    } else if (process.env.GOOGLE_CLIENT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
-      let privateKey = process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
-      privateKey = privateKey.trim();
-      if (!privateKey.endsWith('\n')) {
-        privateKey += '\n';
-      }
-      
-      credentials = {
-        type: "service_account",
-        project_id: PROJECT_ID,
-        private_key_id: "d62fec6d38ac6021c202694ab7baa6750f476e0d",
-        private_key: privateKey,
-        client_email: process.env.GOOGLE_CLIENT_EMAIL,
-        client_id: "107629132671496374425",
-        auth_uri: "https://accounts.google.com/o/oauth2/auth",
-        token_uri: "https://oauth2.googleapis.com/token",
-        auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-        client_x509_cert_url: `https://www.googleapis.com/robot/v1/metadata/x509/${encodeURIComponent(process.env.GOOGLE_CLIENT_EMAIL)}`,
-        universe_domain: "googleapis.com"
       };
-    }
 
-    if (credentials) {
-      // Create a temporary file for credentials
-      const tempDir = os.tmpdir();
-      const credentialsPath = path.join(tempDir, 'google-credentials.json');
-      fs.writeFileSync(credentialsPath, JSON.stringify(credentials));
-      
-      // Set the path to the credentials file
-      process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
-
-      // Initialize clients
-      docai = new DocumentProcessorServiceClient();
-      dlp = new DlpServiceClient();
-      vertex = new VertexAI({ project: PROJECT_ID, location: LOCATION });
-      generativeModel = vertex?.getGenerativeModel({ model: VERTEX_MODEL });
+      // Initialize clients with direct credentials
+      docai = new DocumentProcessorServiceClient(common);
+      dlp = new DlpServiceClient(common);
+      vertex = new VertexAI({
+        project: PROJECT_ID,
+        location: LOCATION,
+        googleAuthOptions: common
+      });
+      generativeModel = vertex.getGenerativeModel({ model: VERTEX_MODEL });
     }
   } catch (error) {
     console.error('Failed to initialize Google Cloud clients:', error);
@@ -380,52 +353,25 @@ async function redactWithDLP(text: string): Promise<string> {
 async function extractAndAnalyzePages(buffer: Buffer, language: 'en'|'hi'|'hinglish'): Promise<any[]> {
   try {
     console.log('Starting page-by-page extraction...');
-    const pdf = await import('pdf-parse');
     
-    // First, get the PDF document to extract page count and text per page
-    const pdfDoc = await pdf.default(buffer, {
-      // Extract text page by page
-      pagerender: async (pageData: any) => {
-        return pageData.getTextContent().then((textContent: any) => {
-          return textContent.items.map((item: any) => item.str).join(' ');
-        });
-      }
+    // Use pdf-parse for simple page extraction
+    const parsed = await pdf(buffer, {
+      pagerender: (pageData: any) =>
+        pageData.getTextContent().then((tc: any) => tc.items.map((i: any) => i.str).join(' '))
     });
 
-    console.log(`PDF has ${pdfDoc.numpages} pages`);
-    
-    // Extract text from each page individually
-    const pageTexts: string[] = [];
-    const pdfjsLib = await import('pdfjs-dist');
-    // @ts-ignore
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-    
-    const pdfDocument = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise;
-    
-    for (let pageNum = 1; pageNum <= pdfDocument.numPages; pageNum++) {
-      try {
-        const page = await pdfDocument.getPage(pageNum);
-        const textContent = await page.getTextContent();
-        const pageText = textContent.items
-          .map((item: any) => item.str)
-          .join(' ')
-          .trim();
-        
-        pageTexts.push(pageText);
-        console.log(`Extracted page ${pageNum}: ${pageText.length} characters`);
-      } catch (pageError) {
-        console.error(`Error extracting page ${pageNum}:`, pageError);
-        pageTexts.push(''); // Add empty string for failed pages
-      }
-    }
-
-    // Analyze each page individually
     const pageAnalyses = [];
-    for (let i = 0; i < pageTexts.length; i++) {
-      const pageText = pageTexts[i];
+    const pages = parsed?.numpages || 1;
+
+    // For simplicity, split the full text by form feeds or estimate page breaks
+    const allText = parsed.text || '';
+    const approxPageChunks = allText.split(/\f/g); // form-feed separator if present
+
+    for (let i = 0; i < pages; i++) {
+      const pageText = (approxPageChunks[i] || '').trim();
       const pageNum = i + 1;
       
-      if (pageText.trim().length < 50) {
+      if (pageText.length < 50) {
         // Skip pages with very little content
         pageAnalyses.push({
           pageNumber: pageNum,

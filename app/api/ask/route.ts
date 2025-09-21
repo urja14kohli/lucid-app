@@ -2,9 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import type { AnalysisResult } from '../../../lib/types';
 import { VertexAI } from '@google-cloud/vertexai';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
 
 const PROJECT_ID = process.env.GCP_PROJECT_ID;
 const LOCATION = process.env.GCP_LOCATION || 'us-central1';
@@ -24,53 +21,29 @@ let generativeModel: any = null;
 
 if (!MOCK_MODE) {
   try {
-    // Parse credentials from environment variable
-    let credentials;
-    if (process.env.GOOGLE_CREDENTIALS_JSON) {
-      credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
-      // Fix private key formatting - replace literal \n with actual newlines
-      if (credentials.private_key) {
-        credentials.private_key = credentials.private_key.replace(/\\n/g, '\n');
-        // Ensure proper key format - remove any extra whitespace and ensure proper line endings
-        credentials.private_key = credentials.private_key.trim();
-        if (!credentials.private_key.endsWith('\n')) {
-          credentials.private_key += '\n';
+    const credsJson = process.env.GOOGLE_CREDENTIALS_JSON;
+    
+    if (credsJson) {
+      const creds = JSON.parse(credsJson);
+      if (creds.private_key) {
+        creds.private_key = creds.private_key.replace(/\\n/g, '\n');
+      }
+
+      const common = {
+        projectId: PROJECT_ID,
+        credentials: { 
+          client_email: creds.client_email, 
+          private_key: creds.private_key 
         }
-      }
-    } else if (process.env.GOOGLE_CLIENT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
-      let privateKey = process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
-      privateKey = privateKey.trim();
-      if (!privateKey.endsWith('\n')) {
-        privateKey += '\n';
-      }
-      
-      credentials = {
-        type: "service_account",
-        project_id: PROJECT_ID,
-        private_key_id: "d62fec6d38ac6021c202694ab7baa6750f476e0d",
-        private_key: privateKey,
-        client_email: process.env.GOOGLE_CLIENT_EMAIL,
-        client_id: "107629132671496374425",
-        auth_uri: "https://accounts.google.com/o/oauth2/auth",
-        token_uri: "https://oauth2.googleapis.com/token",
-        auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-        client_x509_cert_url: `https://www.googleapis.com/robot/v1/metadata/x509/${encodeURIComponent(process.env.GOOGLE_CLIENT_EMAIL)}`,
-        universe_domain: "googleapis.com"
       };
-    }
 
-    if (credentials) {
-      // Create a temporary file for credentials
-      const tempDir = os.tmpdir();
-      const credentialsPath = path.join(tempDir, 'google-credentials.json');
-      fs.writeFileSync(credentialsPath, JSON.stringify(credentials));
-      
-      // Set the path to the credentials file
-      process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
-
-      // Initialize clients
-      vertex = new VertexAI({ project: PROJECT_ID, location: LOCATION });
-      generativeModel = vertex?.getGenerativeModel({ model: MODEL });
+      // Initialize clients with direct credentials
+      vertex = new VertexAI({
+        project: PROJECT_ID,
+        location: LOCATION,
+        googleAuthOptions: common
+      });
+      generativeModel = vertex.getGenerativeModel({ model: MODEL });
     }
   } catch (error) {
     console.error('Failed to initialize Google Cloud clients:', error);
