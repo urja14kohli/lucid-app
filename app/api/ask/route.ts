@@ -75,6 +75,12 @@ async function generateDynamicResponse(question: string, context?: AnalysisResul
     return generateMockResponse(question, context, filename);
   }
 
+  // Check if generativeModel is available before proceeding
+  if (!generativeModel) {
+    console.error('Generative model not available, falling back to mock response');
+    return generateMockResponse(question, context, filename);
+  }
+
   // Build context for the AI
   let documentContext = '';
   if (context) {
@@ -155,7 +161,7 @@ User Question: ${question}
 Please provide a helpful, accurate, and engaging response based on the available context.`;
 
   try {
-    const response = await generativeModel!.generateContent({
+    const response = await generativeModel.generateContent({
       contents: [
         { role: 'user', parts: [{ text: systemPrompt }] }
       ],

@@ -89,18 +89,21 @@ NEXT_PUBLIC_BASE_URL=http://localhost:3000
 ## 🆕 Recent Enhancements
 
 ### AI Assistant Improvements
+
 - **Dynamic AI Responses**: Real-time AI integration with Google Cloud Vertex AI
 - **Web Search Integration**: Automatic web search for current information
 - **Conversation Memory**: Maintains context across multiple questions
 - **Typing Indicators**: Visual feedback during AI processing
 
 ### User Experience
+
 - **Interactive PDF Canvas**: Visual PDF viewer with clickable risk highlights
 - **Page-by-Page Analysis**: Detailed breakdown of each document page
 - **My Notes Feature**: Save and manage important findings
 - **Enhanced UI**: Improved responsive design and accessibility
 
 ### Technical Improvements
+
 - **Build Optimization**: Fixed all ESLint warnings and build errors
 - **Performance**: Optimized PDF rendering and AI response times
 - **Code Quality**: TypeScript improvements and better error handling

@@ -72,28 +72,43 @@ export async function POST(req: NextRequest) {
 async function redactPIIWithDLP(input: string) {
   if (!input || !input.trim()) return input;
   
-  if (MOCK_MODE) {
+  if (MOCK_MODE || !dlp) {
     return input
       .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g, '[EMAIL_REDACTED]')
       .replace(/\b\d{3}-\d{3}-\d{4}\b/g, '[PHONE_REDACTED]')
       .replace(/\b\d{3}-\d{2}-\d{4}\b/g, '[SSN_REDACTED]');
   }
 
-  const [resp] = await dlp!.deidentifyContent({
-    parent: `projects/${PROJECT_ID}/locations/global`,
-    item: { value: input },
-    inspectConfig: { includeQuote: false },
-    deidentifyConfig: {
-      infoTypeTransformations: {
-        transformations: [{ primitiveTransformation: { replaceWithInfoTypeConfig: {} } }]
+  try {
+    const [resp] = await dlp.deidentifyContent({
+      parent: `projects/${PROJECT_ID}/locations/global`,
+      item: { value: input },
+      inspectConfig: { includeQuote: false },
+      deidentifyConfig: {
+        infoTypeTransformations: {
+          transformations: [{ primitiveTransformation: { replaceWithInfoTypeConfig: {} } }]
+        }
       }
-    }
-  });
-  return resp.item?.value ?? input;
+    });
+    return resp.item?.value ?? input;
+  } catch (error) {
+    console.error('DLP redaction error:', error);
+    // Fallback to basic regex redaction
+    return input
+      .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g, '[EMAIL_REDACTED]')
+      .replace(/\b\d{3}-\d{3}-\d{4}\b/g, '[PHONE_REDACTED]')
+      .replace(/\b\d{3}-\d{2}-\d{4}\b/g, '[SSN_REDACTED]');
+  }
 }
 
 async function analyzeWithGemini(text: string, language: 'en'|'hi'|'hinglish'): Promise<AnalysisResult> {
   if (MOCK_MODE) {
+    return generateMockAnalysis(text, language);
+  }
+
+  // Check if generativeModel is available before proceeding
+  if (!generativeModel) {
+    console.error('Generative model not available, falling back to mock analysis');
     return generateMockAnalysis(text, language);
   }
 
@@ -106,22 +121,27 @@ async function analyzeWithGemini(text: string, language: 'en'|'hi'|'hinglish'): 
 
   const user = `\nLANG=${language}\nTEXT:\n${text.slice(0, 100000)}\nReturn:\n{\n  "summary": "<200-400 words plain-language summary in LANG>",\n  "overallRisk": "low|medium|high",\n  "clauses": [\n    {\n      "id": "c1",\n      "title": "Auto-renewal | Penalty/Fee | Liability | Arbitration | Jurisdiction | Termination | Clause",\n      "original": "...",\n      "simple": "... (in LANG)",\n      "why": "...",\n      "risk": "low|medium|high",\n      "citations": []\n    }\n  ],\n  "language":"en|hi|hinglish"\n}`;
 
-  const resp = await generativeModel!.generateContent({
-    contents: [
-      { role: 'system', parts: [{ text: sys }] },
-      { role: 'user', parts: [{ text: user }] }
-    ],
-    generationConfig: { temperature: 0.2, maxOutputTokens: 2048 },
-    safetySettings: []
-  });
+  try {
+    const resp = await generativeModel.generateContent({
+      contents: [
+        { role: 'system', parts: [{ text: sys }] },
+        { role: 'user', parts: [{ text: user }] }
+      ],
+      generationConfig: { temperature: 0.2, maxOutputTokens: 2048 },
+      safetySettings: []
+    });
 
-  const txt = resp.response.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-  let out: AnalysisResult;
-  try { out = JSON.parse(txt); }
-  catch {
-    out = generateMockAnalysis(text, language);
+    const txt = resp.response.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+    let out: AnalysisResult;
+    try { out = JSON.parse(txt); }
+    catch {
+      out = generateMockAnalysis(text, language);
+    }
+    return out;
+  } catch (error) {
+    console.error('AI analysis error:', error);
+    return generateMockAnalysis(text, language);
   }
-  return out;
 }
 
 function generateMockAnalysis(text: string, language: 'en'|'hi'|'hinglish'): AnalysisResult {
