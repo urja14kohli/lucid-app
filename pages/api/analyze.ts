@@ -7,6 +7,8 @@ import pdf from 'pdf-parse';
 import type { AnalysisResult, RiskLevel, Segment } from '../../lib/types';
 import formidable from 'formidable';
 import fs from 'fs';
+import path from 'path';
+import os from 'os';
 
 const PROJECT_ID = process.env.GCP_PROJECT_ID;
 const LOCATION = process.env.GCP_LOCATION || 'us-central1';
@@ -15,34 +17,60 @@ const VERTEX_MODEL = process.env.VERTEX_MODEL || 'gemini-2.5-flash';
 
 // Check if we have the required credentials
 const hasCredentials = PROJECT_ID && (
-  process.env.GOOGLE_APPLICATION_CREDENTIALS || 
+  process.env.GOOGLE_CREDENTIALS_JSON || 
   (process.env.GOOGLE_CLIENT_EMAIL && process.env.GOOGLE_PRIVATE_KEY)
 );
 
 const MOCK_MODE = !hasCredentials;
 
-// Set up credentials for Google Cloud
-if (hasCredentials && process.env.GOOGLE_CLIENT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
-  process.env.GOOGLE_APPLICATION_CREDENTIALS = JSON.stringify({
-    type: "service_account",
-    project_id: PROJECT_ID,
-    private_key_id: "d62fec6d38ac6021c202694ab7baa6750f476e0d",
-    private_key: process.env.GOOGLE_PRIVATE_KEY,
-    client_email: process.env.GOOGLE_CLIENT_EMAIL,
-    client_id: "107629132671496374425",
-    auth_uri: "https://accounts.google.com/o/oauth2/auth",
-    token_uri: "https://oauth2.googleapis.com/token",
-    auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-    client_x509_cert_url: `https://www.googleapis.com/robot/v1/metadata/x509/${encodeURIComponent(process.env.GOOGLE_CLIENT_EMAIL)}`,
-    universe_domain: "googleapis.com"
-  });
-}
+// Initialize Google Auth and clients
+let docai: DocumentProcessorServiceClient | null = null;
+let dlp: DlpServiceClient | null = null;
+let vertex: VertexAI | null = null;
+let generativeModel: any = null;
 
-// Initialize clients only if we have credentials
-const docai = MOCK_MODE ? null : new DocumentProcessorServiceClient();
-const dlp = MOCK_MODE ? null : new DlpServiceClient();
-const vertex = MOCK_MODE ? null : new VertexAI({ project: PROJECT_ID, location: LOCATION });
-const generativeModel = MOCK_MODE ? null : vertex?.getGenerativeModel({ model: VERTEX_MODEL });
+if (!MOCK_MODE) {
+  try {
+    // Parse credentials from environment variable
+    let credentials;
+    if (process.env.GOOGLE_CREDENTIALS_JSON) {
+      credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+    } else if (process.env.GOOGLE_CLIENT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
+      credentials = {
+        type: "service_account",
+        project_id: PROJECT_ID,
+        private_key_id: "d62fec6d38ac6021c202694ab7baa6750f476e0d",
+        private_key: process.env.GOOGLE_PRIVATE_KEY,
+        client_email: process.env.GOOGLE_CLIENT_EMAIL,
+        client_id: "107629132671496374425",
+        auth_uri: "https://accounts.google.com/o/oauth2/auth",
+        token_uri: "https://oauth2.googleapis.com/token",
+        auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+        client_x509_cert_url: `https://www.googleapis.com/robot/v1/metadata/x509/${encodeURIComponent(process.env.GOOGLE_CLIENT_EMAIL)}`,
+        universe_domain: "googleapis.com"
+      };
+    }
+
+    if (credentials) {
+      // Create a temporary file for credentials
+      const tempDir = os.tmpdir();
+      const credentialsPath = path.join(tempDir, 'google-credentials.json');
+      fs.writeFileSync(credentialsPath, JSON.stringify(credentials));
+      
+      // Set the path to the credentials file
+      process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
+
+      // Initialize clients
+      docai = new DocumentProcessorServiceClient();
+      dlp = new DlpServiceClient();
+      vertex = new VertexAI({ project: PROJECT_ID, location: LOCATION });
+      generativeModel = vertex?.getGenerativeModel({ model: VERTEX_MODEL });
+    }
+  } catch (error) {
+    console.error('Failed to initialize Google Cloud clients:', error);
+    // Fall back to mock mode
+  }
+}
 
 // Disable Next.js body parsing to handle multipart/form-data
 export const config = {
